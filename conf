@@ -1,0 +1,66 @@
+#!/bin/bash -ex
+install()
+{
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y \
+        -o DPkg::Options::=--force-confdef \
+        -o DPkg::Options::=--force-confold \
+        install $@
+}
+
+cleanup_apt()
+    {
+        rm -r /var/cache/apt/*
+        mkdir /var/cache/apt/archives
+        mkdir /var/cache/apt/archives/partial
+    }
+
+# Activate Ubuntu partner repository (swftools are in this repo)
+echo deb http://archive.canonical.com/ lucid partner >> /etc/apt/sources.list.d/sources.list
+
+#Install required packages
+install openjdk-6-jdk tomcat6 mysql-server libmysql-java openoffice.org-core openoffice.org-java-common imagemagick swftools postfix openoffice.org-impress openoffice.org-calc openoffice.org-writer
+
+#Configure JAVA_HOME and JVM_OPTS for a 768MB memory vm
+echo JAVA_HOME="/usr/lib/jvm/java-6-openjdk/" >> /etc/environment
+source /etc/environment
+echo JAVA_OPTS=\"\${JAVA_OPTS} -Xms512m -Xmx512m\" >> /etc/default/tomcat6
+echo JAVA_OPTS=\"\${JAVA_OPTS} -XX:MaxPermSize=128M\" >> /etc/default/tomcat6
+echo JAVA_OPTS=\"\${JAVA_OPTS} -Dhibernate.dialect=org.hibernate.dialect.MySQLInnoDBDialect\" >> /etc/default/tomcat6
+
+#Download and untar alfresco wars
+mkdir -p /opt/alfresco && cd /opt/alfresco
+wget -O alfresco-community-war-3.3g.tar.gz http://dl.alfresco.com/release/community/build-2860/alfresco-community-war-3.3g.tar.gz?dl_file=release/community/build-2860/alfresco-community-war-3.3g.tar.gz
+tar xf alfresco-community-war-3.3g.tar.gz
+rm alfresco-community-war-3.3g.tar.gz
+
+#Create database
+service mysql start
+mysql -u root < /opt/alfresco/extras/databases/mysql/db_setup.sql
+
+#Create Alfresco repository directory
+mkdir -p /srv/alfresco/alf_data
+
+#Set symlinks to wars and mysql jar
+ln -s /opt/alfresco/alfresco.war /var/lib/tomcat6/webapps/
+ln -s /opt/alfresco/share.war /var/lib/tomcat6/webapps/
+ln -s /usr/share/java/mysql-connector-java.jar /var/lib/tomcat6/shared/
+
+#Set hostname
+HOSTNAME=alfresco
+echo "$HOSTNAME" > /etc/hostname
+sed -i "s|127.0.1.1 \(.*\)|127.0.1.1 $HOSTNAME|" /etc/hosts
+
+#Setup required permissions
+chown -R tomcat6:tomcat6 /var/lib/tomcat6 /srv/alfresco
+
+#Activate iptables for port redirections
+echo 1 > /proc/sys/net/ipv4/ip_forward
+modprobe iptable_nat
+
+#Stop services to prevent port conflicts
+service tomcat6 stop
+service mysql stop
+
+#Clean apt cache
+cleanup_apt
